@@ -28,7 +28,6 @@ set(CMAKE_VERBOSE_MAKEFILE OFF)
 
 get_filename_component(REPOSITORY_DIR ${PROJECT_SOURCE_DIR} ABSOLUTE)
 
-
 if( POLICY CMP0046 )
   cmake_policy(VERSION 2.8)
   # The new policy for add_dependencies is to now error if a dependency target
@@ -45,6 +44,16 @@ endif()
 
 
 #
+# Global NuPIC CMake options
+#
+option(NUPIC_BUILD_PYEXT_MODULES
+       "Turn on building of python extension modules for nupic.bindings; turn off to build only static nupic_core lib with full symbol visibility."
+       ON)
+
+message(STATUS "NUPIC_BUILD_PYEXT_MODULES = ${NUPIC_BUILD_PYEXT_MODULES}")
+message(STATUS "PY_EXTENSIONS_DIR         = ${PY_EXTENSIONS_DIR}")
+
+#
 # Identify build type - local or deployment (Travis)
 # the variable NUPIC_DEPLOYMENT_BUILD must be set in travis CI scripts
 #
@@ -53,6 +62,13 @@ if($ENV{NUPIC_DEPLOYMENT_BUILD})
 else()
   message("Doing a local build")
 endif()
+
+
+message(STATUS "CMAKE_CXX_COMPILER_ID = ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "CMAKE_C_COMPILER      = ${CMAKE_C_COMPILER}")
+message(STATUS "CMAKE_CXX_COMPILER    = ${CMAKE_CXX_COMPILER}")
+message(STATUS "CMAKE_BUILD_TYPE      = ${CMAKE_BUILD_TYPE}")
+message(STATUS "CMAKE_INSTALL_PREFIX  = ${CMAKE_INSTALL_PREFIX}")
 
 
 # Identify platform name.
@@ -72,18 +88,8 @@ set(EP_BASE ${CMAKE_BINARY_DIR}/ThirdParty)
 # Determine common toolchain settings, compiler and link flags
 include(CommonCompilerConfig)
 
-# Set up external dependencies.
-#
-# This will try find_library and find_program and if that fails use
-# ExternalProject to fetch and build the libraries.
-#
-# Sets the following variables:
-#   CAPNP_LINK_LIBRARIES
-#   EXTERNAL_INCLUDE_DIRS
-#
-# Defines the follow functions:
-#   create_capnpc_target - Creates target that generates C++ files from
-#       .capnp schema files.
+# Set up builds of external dependencies and get their exports.
+# (see individual external/*.cmake modules for exported settings and functions)
 add_subdirectory(external)
 include_directories(SYSTEM ${EXTERNAL_INCLUDE_DIRS})
 

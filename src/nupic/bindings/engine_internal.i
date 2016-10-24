@@ -23,30 +23,6 @@
 %module(package="bindings") engine_internal
 %include <nupic/bindings/exception.i>
 
-%pythoncode %{
-# ----------------------------------------------------------------------
-# Numenta Platform for Intelligent Computing (NuPIC)
-# Copyright (C) 2013, Numenta, Inc.  Unless you have an agreement
-# with Numenta, Inc., for a separate license for this software code, the
-# following terms and conditions apply:
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero Public License version 3 as
-# published by the Free Software Foundation.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-# See the GNU Affero Public License for more details.
-#
-# You should have received a copy of the GNU Affero Public License
-# along with this program.  If not, see http://www.gnu.org/licenses.
-#
-# http://numenta.org/licenses/
-# ----------------------------------------------------------------------
-
-%}
-
 %{
 /* ---------------------------------------------------------------------
  * Numenta Platform for Intelligent Computing (NuPIC)
@@ -90,6 +66,7 @@
 
 #include <nupic/engine/NuPIC.hpp>
 #include <nupic/engine/Network.hpp>
+#include <nupic/engine/NetworkFactory.hpp>
 
 #include <nupic/proto/NetworkProto.capnp.h>
 
@@ -101,7 +78,10 @@
 #include <nupic/utils/Watcher.hpp>
 #include <nupic/engine/Region.hpp>
 #include <nupic/os/Timer.hpp>
+
+#include <yaml-cpp/yaml.h>
 %}
+
 
 %include "std_pair.i"
 %include "std_string.i"
@@ -138,6 +118,8 @@
 
 %include <nupic/engine/NuPIC.hpp>
 %include <nupic/engine/Network.hpp>
+%ignore nupic::NetworkFactory::createNetworkFromYAML;
+%include <nupic/engine/NetworkFactory.hpp>
 %ignore nupic::Region::getInputData;
 %ignore nupic::Region::getOutputData;
 %include <nupic/engine/Region.hpp>
@@ -239,6 +221,17 @@
   %#endif
   }
 }
+
+%extend nupic::NetworkFactory
+{
+  Network createNetworkFromYAMLString(const std::string yamlstr)
+  {
+    std::stringstream ss(yamlstr);
+    YAML::Parser parser(ss);
+    return self->createNetworkFromYAML(parser);
+  }
+}
+
 
 %{
 #include <nupic/os/OS.hpp>

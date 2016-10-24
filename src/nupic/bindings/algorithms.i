@@ -20,36 +20,14 @@
  * ---------------------------------------------------------------------
  */
 
-%module(package="bindings") algorithms
+%module(package="bindings", directors="1") algorithms
 %include <nupic/bindings/exception.i>
 %import <nupic/bindings/math.i>
 
 %pythoncode %{
-# ----------------------------------------------------------------------
-# Numenta Platform for Intelligent Computing (NuPIC)
-# Copyright (C) 2013-2015, Numenta, Inc.  Unless you have an agreement
-# with Numenta, Inc., for a separate license for this software code, the
-# following terms and conditions apply:
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero Public License version 3 as
-# published by the Free Software Foundation.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-# See the GNU Affero Public License for more details.
-#
-# You should have received a copy of the GNU Affero Public License
-# along with this program.  If not, see http://www.gnu.org/licenses.
-#
-# http://numenta.org/licenses/
-# ----------------------------------------------------------------------
-
 import os
 
 _ALGORITHMS = _algorithms
-
 %}
 
 %{
@@ -101,6 +79,7 @@ _ALGORITHMS = _algorithms
 #include <nupic/algorithms/ClassifierResult.hpp>
 #include <nupic/algorithms/Connections.hpp>
 #include <nupic/algorithms/FastClaClassifier.hpp>
+#include <nupic/algorithms/SDRClassifier.hpp>
 #include <nupic/algorithms/InSynapse.hpp>
 #include <nupic/algorithms/OutSynapse.hpp>
 #include <nupic/algorithms/SegmentUpdate.hpp>
@@ -133,12 +112,14 @@ using namespace nupic::algorithms::connections;
 using namespace nupic::algorithms::temporal_memory;
 using namespace nupic::algorithms::Cells4;
 using namespace nupic::algorithms::cla_classifier;
+using namespace nupic::algorithms::sdr_classifier;
 using namespace nupic;
 
 #define CHECKSIZE(var) \
   NTA_ASSERT(PyArray_DESCR(var)->elsize == 4) << " elsize:" << PyArray_DESCR(var)->elsize
 
 %}
+
 
 // %pythoncode %{
 //   import numpy
@@ -1024,6 +1005,12 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
   }
 }
 
+// In these SWIG wrapper methods, don't use the `const` qualifier. There has to
+// be some difference in the method signature so that C++ function overloading
+// can happen. Expose the internal `const` methods with a different name.
+%rename(getOverlapsTuple) nupic::algorithms::spatial_pooler::SpatialPooler::getOverlaps() const;
+%rename(getBoostedOverlapsTuple) nupic::algorithms::spatial_pooler::SpatialPooler::getBoostedOverlaps() const;
+
 %include <nupic/algorithms/SpatialPooler.hpp>
 
 %extend nupic::algorithms::spatial_pooler::SpatialPooler
@@ -1265,6 +1252,20 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
     self->getConnectedCounts((nupic::UInt*) PyArray_DATA(x));
   }
 
+  PyObject* getOverlaps()
+  {
+    const std::vector<nupic::UInt>& overlaps = self->getOverlaps();
+    nupic::NumpyVectorT<nupic::UInt> npOverlaps(overlaps.size(), overlaps.data());
+    return npOverlaps.forPython();
+  }
+
+  PyObject* getBoostedOverlaps()
+  {
+    const std::vector<nupic::Real>& overlaps = self->getBoostedOverlaps();
+    nupic::NumpyVectorT<nupic::Real> npOverlaps(overlaps.size(), overlaps.data());
+    return npOverlaps.forPython();
+  }
+
   inline PyObject* calculateOverlap_(PyObject* py_inputVector)
   {
     PyArrayObject* inputVector = (PyArrayObject*) py_inputVector;
@@ -1487,14 +1488,177 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
 
 }
 
+
+%include <nupic/algorithms/SDRClassifier.hpp>
+
+%pythoncode %{
+  import numpy
+%}
+
+%extend nupic::algorithms::sdr_classifier::SDRClassifier
+{
+  %pythoncode %{
+    VERSION = 1
+
+    def __init__(self, steps=(1,), alpha=0.001, actValueAlpha=0.3, verbosity=0):
+      self.this = _ALGORITHMS.new_SDRClassifier(
+          steps, alpha, actValueAlpha, verbosity)
+      self.valueToCategory = {}
+      self.version = SDRClassifier.VERSION
+
+    def compute(self, recordNum, patternNZ, classification, learn, infer):
+      isNone = False
+      noneSentinel = 3.14159
+
+      if type(classification["actValue"]) in (int, float):
+        actValue = classification["actValue"]
+        category = False
+      elif classification["actValue"] is None:
+        # Use the sentinel value so we know if it gets used in actualValues
+        # returned.
+        actValue = noneSentinel
+        # Turn learning off this step.
+        learn = False
+        category = False
+        # This does not get used when learning is disabled anyway.
+        classification["bucketIdx"] = 0
+        isNone = True
+      else:
+        actValue = int(classification["bucketIdx"])
+        category = True
+
+      result = self.convertedCompute(
+          recordNum, patternNZ, int(classification["bucketIdx"]),
+          actValue, category, learn, infer)
+
+      if isNone:
+        for i, v in enumerate(result["actualValues"]):
+          if v - noneSentinel < 0.00001:
+            result["actualValues"][i] = None
+      arrayResult = dict((k, numpy.array(v)) if k != "actualValues" else (k, v)
+                         for k, v in result.iteritems())
+
+      if self.valueToCategory or isinstance(classification["actValue"], basestring):
+        # Convert the bucketIdx back to the original value.
+        for i in xrange(len(arrayResult["actualValues"])):
+          if arrayResult["actualValues"][i] is not None:
+            arrayResult["actualValues"][i] = self.valueToCategory.get(int(
+                arrayResult["actualValues"][i]), classification["actValue"])
+
+        self.valueToCategory[actValue] = classification["actValue"]
+
+      return arrayResult
+
+    def __getstate__(self):
+      # Save the local attributes but override the C++ classifier with the
+      # string representation.
+      d = dict(self.__dict__)
+      d["this"] = self.getCState()
+      return d
+
+    def __setstate__(self, state):
+      # Create an empty C++ classifier and populate it from the serialized
+      # string.
+      self.this = _ALGORITHMS.new_SDRClassifier()
+      if isinstance(state, str):
+        self.loadFromString(state)
+        self.valueToCategory = {}
+      else:
+        assert state["version"] == self.VERSION
+        self.loadFromString(state["this"])
+        # Use the rest of the state to set local Python attributes.
+        del state["this"]
+        self.__dict__.update(state)
+
+    @classmethod
+    def read(cls, proto):
+      instance = cls()
+      instance.convertedRead(proto)
+      return instance
+  %}
+
+  void loadFromString(const std::string& inString)
+  {
+    std::istringstream inStream(inString);
+    self->load(inStream);
+  }
+
+  PyObject* getCState()
+  {
+    SharedPythonOStream py_s(self->persistentSize());
+    std::ostream& s = py_s.getStream();
+    // TODO: Consider writing floats as binary instead.
+    s.flags(ios::scientific);
+    s.precision(numeric_limits<double>::digits10 + 1);
+    self->save(s);
+    return py_s.close();
+  }
+
+  PyObject* convertedCompute(UInt recordNum, const vector<UInt>& patternNZ,
+                             UInt bucketIdx, Real64 actValue, bool category,
+                             bool learn, bool infer)
+  {
+    ClassifierResult result;
+    self->compute(recordNum, patternNZ, bucketIdx, actValue, category,
+                  learn, infer, &result);
+    PyObject* d = PyDict_New();
+    for (map<Int, vector<Real64>*>::const_iterator it = result.begin();
+         it != result.end(); ++it)
+    {
+      PyObject* key;
+      if (it->first == -1)
+      {
+        key = PyString_FromString("actualValues");
+      } else {
+        key = PyInt_FromLong(it->first);
+      }
+
+      PyObject* value = PyList_New(it->second->size());
+      for (UInt i = 0; i < it->second->size(); ++i)
+      {
+        PyObject* pyActValue = PyFloat_FromDouble(it->second->at(i));
+        PyList_SetItem(value, i, pyActValue);
+      }
+
+      PyDict_SetItem(d, key, value);
+      Py_DECREF(value);
+    }
+    return d;
+  }
+
+  inline void write(PyObject* pyBuilder) const
+  {
+  %#if !CAPNP_LITE
+    SdrClassifierProto::Builder proto =
+        getBuilder<SdrClassifierProto>(pyBuilder);
+    self->write(proto);
+  %#else
+    throw std::logic_error(
+        "SDRClassifier.write is not implemented when compiled with CAPNP_LITE=1.");
+  %#endif
+  }
+
+  inline void convertedRead(PyObject* pyReader)
+  {
+  %#if !CAPNP_LITE
+    SdrClassifierProto::Reader proto =
+        getReader<SdrClassifierProto>(pyReader);
+    self->read(proto);
+  %#else
+    throw std::logic_error(
+        "SDRClassifier.read is not implemented when compiled with CAPNP_LITE=1.");
+  %#endif
+  }
+
+}
+
 //--------------------------------------------------------------------------------
 // Data structures (Connections)
 %rename(ConnectionsSynapse) nupic::algorithms::connections::Synapse;
 %rename(ConnectionsSegment) nupic::algorithms::connections::Segment;
-%rename(ConnectionsCell) nupic::algorithms::connections::Cell;
 %template(ConnectionsSynapseVector) vector<nupic::algorithms::connections::Synapse>;
 %template(ConnectionsSegmentVector) vector<nupic::algorithms::connections::Segment>;
-%template(ConnectionsCellVector) vector<nupic::algorithms::connections::Cell>;
+%feature("director") nupic::algorithms::connections::ConnectionsEventHandler;
 %include <nupic/algorithms/Connections.hpp>
 
 
@@ -1511,15 +1675,6 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
                                               maxSegmentsPerCell,
                                               maxSynapsesPerSegment)
 
-    def mostActiveSegmentForCells(self, cells, input, synapseThreshold):
-      segment = ConnectionsSegment()
-      result = _ALGORITHMS.Connections_mostActiveSegmentForCells(
-        self, cells, input, synapseThreshold, segment)
-      return segment if result else None
-
-    def cellForSegment(self, segment):
-      """Used by TemporalMemory.learnOnSegments"""
-      return segment.cell
 
     @classmethod
     def read(cls, proto):
@@ -1555,34 +1710,12 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
 
 }
 
-%extend nupic::algorithms::connections::Cell
-{
-  %pythoncode %{
-
-    def __key(self):
-      return (self.idx,)
-
-    def __eq__(x, y):
-      return x.__key() == y.__key()
-
-    def __hash__(self):
-      return hash(self.__key())
-
-    def __str__(self):
-      return str(self.idx)
-
-    def __repr__(self):
-      return str(self)
-
-  %}
-}
-
 %extend nupic::algorithms::connections::Segment
 {
   %pythoncode %{
 
     def __key(self):
-      return (self.idx, self.cell)
+      return self.flatIdx
 
     def __eq__(x, y):
       return x.__key() == y.__key()
@@ -1591,7 +1724,7 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
       return hash(self.__key())
 
     def __str__(self):
-      return "{0}-{1}".format(self.cell, self.idx)
+      return "{0}-{1}".format(self.flatIdx)
 
     def __repr__(self):
       return str(self)
@@ -1604,7 +1737,7 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
   %pythoncode %{
 
     def __key(self):
-      return (self.idx, self.segment)
+      return self.flatIdx
 
     def __eq__(x, y):
       return x.__key() == y.__key()
@@ -1613,7 +1746,7 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
       return hash(self.__key())
 
     def __str__(self):
-      return "{0}-{1}".format(self.segment, self.idx)
+      return "{0}".format(self.flatIdx)
 
     def __repr__(self):
       return str(self)
@@ -1653,8 +1786,8 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
                  permanenceIncrement=0.10,
                  permanenceDecrement=0.10,
                  predictedSegmentDecrement=0.00,
-                 maxSegmentsPerCell=MAX_SEGMENTS_PER_CELL,
-                 maxSynapsesPerSegment=MAX_SYNAPSES_PER_SEGMENT,
+                 maxSegmentsPerCell=255,
+                 maxSynapsesPerSegment=255,
                  seed=42):
       self.this = _ALGORITHMS.new_TemporalMemory()
       _ALGORITHMS.TemporalMemory_initialize(
@@ -1684,8 +1817,41 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
         del state["this"]
         self.__dict__.update(state)
 
+
+    def activateCells(self,
+                      activeColumns,
+                      learn=True):
+      """
+      Calculate the active cells, using the current active columns and dendrite
+      segments. Grow and reinforce synapses.
+
+      @param activeColumns (iterable)
+      Indices of active columns.
+
+      @param learn (boolean)
+      Whether to grow / reinforce / punish synapses.
+      """
+      columnsArray = numpy.array(sorted(activeColumns), dtype=uintDType)
+
+      self.convertedActivateCells(columnsArray, learn)
+
+
     def compute(self, activeColumns, learn=True):
-      activeColumnsArray = numpy.array(list(activeColumns), dtype=uintDType)
+      """
+      Perform one time step of the Temporal Memory algorithm.
+
+      This method calls activateCells, then calls activateDendrites. Using
+      the TemporalMemory via its compute method ensures that you'll always
+      be able to call getPredictiveCells to get predictions for the next
+      time step.
+
+      @param activeColumns (iterable)
+      Indices of active columns.
+
+      @param learn (boolean)
+      Whether or not learning is enabled.
+      """
+      activeColumnsArray = numpy.array(sorted(activeColumns), dtype=uintDType)
       self.convertedCompute(activeColumnsArray, learn)
 
     @classmethod
@@ -1725,20 +1891,32 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
     return vectorToList(cellIdxs);
   }
 
-  UInt columnForCell(UInt cellIdx)
+  inline void convertedActivateCells(PyObject *py_activeColumns,
+                                     bool learn)
   {
-    nupic::algorithms::connections::Cell cell(cellIdx);
-    return self->columnForCell(cell);
+    PyArrayObject* _activeColumns =
+      (PyArrayObject*) py_activeColumns;
+    size_t activeColumnsSize =
+      PyArray_DIMS(_activeColumns)[0];
+    UInt32* activeColumns =
+      (UInt32*)PyArray_DATA(_activeColumns);
+
+    self->activateCells(activeColumnsSize,
+                        activeColumns,
+                        learn);
   }
 
-  inline void convertedCompute(PyObject *py_x, bool learn)
+  inline void convertedCompute(PyObject *py_activeColumns,
+                               bool learn)
   {
-    PyArrayObject* _x = (PyArrayObject*) py_x;
+    PyArrayObject* _activeColumns =
+      (PyArrayObject*) py_activeColumns;
+    size_t activeColumnsSize =
+      PyArray_DIMS(_activeColumns)[0];
+    UInt32* activeColumns =
+      (UInt32*)PyArray_DATA(_activeColumns);
 
-    nupic::UInt32  len = (nupic::UInt32)PyArray_DIMS(_x)[0];
-    nupic::UInt32* data = (nupic::UInt32*)PyArray_DATA(_x);
-
-    self->compute(len, data, learn);
+    self->compute(activeColumnsSize, activeColumns, learn);
   }
 
   inline void write(PyObject* pyBuilder) const
@@ -1788,7 +1966,6 @@ inline PyObject* generate2DGaussianSample(nupic::UInt32 nrows, nupic::UInt32 nco
 %ignore nupic::algorithms::temporal_memory::TemporalMemory::getWinnerCells;
 %ignore nupic::algorithms::temporal_memory::TemporalMemory::getMatchingCells;
 %ignore nupic::algorithms::temporal_memory::TemporalMemory::cellsForColumn;
-%ignore nupic::algorithms::temporal_memory::TemporalMemory::columnForCell;
 
 
 %include <nupic/algorithms/TemporalMemory.hpp>

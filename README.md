@@ -7,7 +7,7 @@ This repository contains the C++ source code for the Numenta Platform for Intell
 You can install the `nupic.bindings` Python package from PyPI:
 
     pip install nupic.bindings
-    
+
 Optionally include `--user` or other flags to determine where the package is installed.
 
 > **Note**: On Linux this will do a source installation and will require that the prerequisites specified below are installed.
@@ -27,7 +27,7 @@ Important notes:
 - [NumPy](http://www.numpy.org/) - Can be installed through some system package managers or via [pip](https://pip.pypa.io/)
     - Version 1.9.2
 - [pycapnp](http://jparyani.github.io/pycapnp/)
-    - Version 0.5.5 (_Linux and OSX only_)
+    - Version 0.5.8 (_Linux and OSX only_)
 - [CMake](http://www.cmake.org/)
 
 > **Note**: On Windows, Python package dependencies require the following compiler package to be installed: [Microsoft Visual C++ Compiler for Python 2.7](https://www.microsoft.com/en-gb/download/details.aspx?id=44266)
@@ -35,6 +35,7 @@ Important notes:
 The Python dependencies (NumPy and pycapnp) can be installed with `pip`:
 
     pip install -r bindings/py/requirements.txt
+    pip install pycapnp==0.5.8
 
 ### Simple Source Installation (does not support incremental builds)
 
@@ -60,14 +61,17 @@ This option is for developers that would like the ability to do incremental buil
 
     mkdir -p $NUPIC_CORE/build/scripts
     cd $NUPIC_CORE/build/scripts
-    cmake $NUPIC_CORE -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=../release -DPY_EXTENSIONS_DIR=$NUPIC_CORE/bindings/py/nupic/bindings
+    cmake $NUPIC_CORE -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../release -DPY_EXTENSIONS_DIR=$NUPIC_CORE/bindings/py/nupic/bindings
 
 Notes:
 
-- This will generate Debug build files. For a release build, change `-DCMAKE_BUILD_TYPE` to `Release`.
+- This will generate Release build files. For a debug build, change `-DCMAKE_BUILD_TYPE` to `Debug`.
+- To build nupic.core for generating the nupic.bindings python extension, pass `-DNUPIC_BUILD_PYEXT_MODULES=ON`; it is the default at this time.
+- To build nupic.core as a standalone static library, pass `-DNUPIC_BUILD_PYEXT_MODULES=OFF`.
 - If you have dependencies precompiled but not in standard system locations then you can specify where to find them with `-DCMAKE_PREFIX_PATH` (for bin/lib) and `-DCMAKE_INCLUDE_PATH` (for header files).
 - The `-DCMAKE_INSTALL_PREFIX=../release` option shown above is optional, and specifies the location where `nupic.core` should be installed. If omitted, `nupic.core` will be installed in a system location. Using this option is useful when testing versions of `nupic.core` with `nupic` (see [NuPIC's Dependency on nupic.core](https://github.com/numenta/nupic/wiki/NuPIC's-Dependency-on-nupic.core)).
 - Setting `-DPY_EXTENSIONS_DIR` copies the Python exension files to the specified directory. If the extensions aren't present when the Python build/installation is invoked then the setup.py file will run the cmake/make process to generate them. Make sure to include this flag if you want to do incremental builds of the Python extensions.
+- On OSX with multiple Python installs (e.g. via brew) cmake might erroneously pick various pieces from different installs which will likely produce abort trap at runtime. Remove cmake cache and re-run cmake with  `-DPYTHON_LIBRARY=/path/to/lib/libpython2.7.dylib` and  `-DPYTHON_INCLUDE_DIR=/path/to/include/python2.7` options to override with desired Python install path.
 
 #### Build:
 
@@ -86,6 +90,7 @@ Notes:
     cd $NUPIC_CORE/build/release/bin
     ./cpp_region_test
     ./unit_tests
+    ...
 
 #### Install nupic.bindings Python library:
 
